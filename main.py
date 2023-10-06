@@ -1,7 +1,7 @@
 import streamlit as st
 import openai
 from pydub import AudioSegment
-import io
+import tempfile
 import os
 
 # API key and password from environment variables
@@ -11,24 +11,32 @@ PASSWORD = os.environ.get("PASSWORD")
 openai.api_key = OPENAI_API_KEY
 
 def transcribe_audio(file, prompt=None):
-    # Handle infinite size by chunking the audio file
-    chunks = []
     audio = AudioSegment.from_file(file)
-    length_audio = len(audio)
-    chunk_length = 25 * 1000 * 1000  # 25 MB in bytes
-    for i in range(0, length_audio, chunk_length):
-        chunks.append(audio[i:i+chunk_length])
     
+    # Adjust chunk size to 20 MB
+    chunk_length = 20 * 1000 * 1000  # 20 MB in bytes
+    chunks = [audio[i:i+chunk_length] for i in range(0, len(audio), chunk_length)]
+
+    st.write(f"Total chunks to be processed: {len(chunks)}")
+
     full_transcript = ""
-    with st.spinner('Transcribing...'):
-        for chunk in chunks:
-            buffered = io.BytesIO()
-            chunk.export(buffered, format="wav")
+    for index, chunk in enumerate(chunks):
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as temp_file:
+            chunk.export(temp_file.name, format="mp3")
+            
+            # Get size of the chunk and display it
+            chunk_size = os.path.getsize(temp_file.name)
+            st.write(f"Size of chunk {index+1}: {chunk_size / (1024 * 1024):.2f} MB")
+            
             params = {"model": "whisper-1"}
             if prompt:
                 params["prompt"] = prompt
-            transcript = openai.Audio.transcribe(**params, file=buffered)
-            full_transcript += transcript['text'] + " "
+
+            with st.spinner(f'Processing chunk {index+1}...'):
+                with open(temp_file.name, "rb") as f:
+                    transcript = openai.Audio.transcribe(file=f, **params)
+                    full_transcript += transcript['text'] + " "
+    
     return full_transcript
 
 st.title("Whisper Audio Transcription")
@@ -43,20 +51,6 @@ if password_input == PASSWORD:
     if uploaded_file is not None:
         transcript = transcribe_audio(uploaded_file, prompt)
         st.write("Transcription:")
-        st.write(transcript)
-    
-    # Provide a download link for the transcript as a text file
-    if st.button('Download Transcript'):
-        filename = 'transcript.txt'
-        with open(filename, 'w') as f:
-            f.write(transcript)
-        with open(filename, 'rb') as f:
-            btn = st.download_button(
-                label="Download Transcript",
-                data=f,
-                file_name=filename,
-                mime='text/plain'
-            )
+        st.text_area("", transcript, height=400, disabled=True)
 else:
     st.warning("Incorrect password!")
-
